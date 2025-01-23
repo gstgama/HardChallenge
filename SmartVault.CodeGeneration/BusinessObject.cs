@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Xml.Serialization;
 
 namespace SmartVault.Library
@@ -28,5 +29,7 @@ namespace SmartVault.Library
 
         [XmlElement(ElementName = "script")]
         public string? Script { get; set; }
+
+        public DateTime CreatedOnDate { get; set; } = DateTime.Now;
     }
 }

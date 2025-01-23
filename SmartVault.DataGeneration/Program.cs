@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.SQLite;
 using System.IO;
+using System.Linq;
 using System.Xml.Serialization;
 
 namespace SmartVault.DataGeneration
@@ -23,26 +24,66 @@ namespace SmartVault.DataGeneration
 
             using (var connection = new SQLiteConnection(string.Format(configuration?["ConnectionStrings:DefaultConnection"] ?? "", configuration?["DatabaseFileName"])))
             {
-                var files = Directory.GetFiles(@"..\..\..\..\BusinessObjectSchema");
-                for (int i = 0; i <= 2; i++)
-                {
-                    var serializer = new XmlSerializer(typeof(BusinessObject));
-                    var businessObject = serializer.Deserialize(new StreamReader(files[i])) as BusinessObject;
-                    connection.Execute(businessObject?.Script);
+                connection.Open();
 
-                }
-                var documentNumber = 0;
-                for (int i = 0; i < 100; i++)
+                using (var transaction = connection.BeginTransaction())
                 {
-                    var randomDayIterator = RandomDay().GetEnumerator();
-                    randomDayIterator.MoveNext();
-                    connection.Execute($"INSERT INTO User (Id, FirstName, LastName, DateOfBirth, AccountId, Username, Password) VALUES('{i}','FName{i}','LName{i}','{randomDayIterator.Current.ToString("yyyy-MM-dd")}','{i}','UserName-{i}','e10adc3949ba59abbe56e057f20f883e')");
-                    connection.Execute($"INSERT INTO Account (Id, Name) VALUES('{i}','Account{i}')");
-
-                    for (int d = 0; d < 10000; d++, documentNumber++)
+                    try
                     {
-                        var documentPath = new FileInfo("TestDoc.txt").FullName;
-                        connection.Execute($"INSERT INTO Document (Id, Name, FilePath, Length, AccountId) VALUES('{documentNumber}','Document{i}-{d}.txt','{documentPath}','{new FileInfo(documentPath).Length}','{i}')");
+                        var files = Directory.GetFiles(@"..\..\..\..\BusinessObjectSchema");
+
+                        for (int i = 0; i <= 2; i++)
+                        {
+                            var serializer = new XmlSerializer(typeof(BusinessObject));
+                            var businessObject = serializer.Deserialize(new StreamReader(files[i])) as BusinessObject;
+                            connection.Execute(businessObject?.Script, transaction);
+                        }
+
+                        var documentNumber = 0;
+                        var fileInfo = new FileInfo("TestDoc.txt");
+
+                        for (int i = 0; i < 100; i++)
+                        {
+                            var randomDayIterator = RandomDay().GetEnumerator();
+                            randomDayIterator.MoveNext();
+
+                            connection.Execute($"INSERT INTO User (Id, FirstName, LastName, DateOfBirth, AccountId, Username, Password) VALUES('{i}','FName{i}','LName{i}','{randomDayIterator.Current.ToString("yyyy-MM-dd")}','{i}','UserName-{i}','e10adc3949ba59abbe56e057f20f883e')", transaction);
+                            connection.Execute($"INSERT INTO Account (Id, Name) VALUES('{i}','Account{i}')", transaction);
+
+                            var batchSize = 500;
+                            var documents = new List<object>();
+
+                            for (int d = 0; d < 10000; d++, documentNumber++)
+                            {
+                                documents.Add(new
+                                {
+                                    Id = documentNumber,
+                                    Name = $"Document{i}-{d}.txt",
+                                    FilePath = fileInfo.FullName,
+                                    Length = fileInfo.Length,
+                                    AccountId = i
+                                });
+
+                                if (documents.Count >= batchSize)
+                                {
+                                    connection.Execute("INSERT INTO Document (Id, Name, FilePath, Length, AccountId) VALUES (@Id, @Name, @FilePath, @Length, @AccountId)", documents, transaction);
+                                    documents.Clear();
+                                }
+                            }
+
+                            if (documents.Count > 0)
+                            {
+                                connection.Execute("INSERT INTO Document (Id, Name, FilePath, Length, AccountId) VALUES (@Id, @Name, @FilePath, @Length, @AccountId)", documents, transaction);
+                            }
+
+                        }
+
+                        transaction.Commit();
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        throw new Exception("Error executing transaction: ", ex);
                     }
                 }
 
